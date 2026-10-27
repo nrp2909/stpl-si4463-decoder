@@ -1,0 +1,355 @@
+options:
+  parameters:
+    author: Neeraj
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: Decodes the raw Si4463 2GFSK bench-test packets (main.c / si4463_config.h) from an SDR++
+      baseband WAV recording. Not an M17 decoder -- this bench firmware bypasses the M17 stack and uses
+      the Si4463's own raw packet engine.
+    copyright: ''
+    description: Si4463 bench-test packet decoder for SDR++ WAV recordings
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: no_gui
+    hier_block_src_path: '.:'
+    id: si4463_bench_decode
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: run
+    sizing_mode: fixed
+    thread_safe_setting: 'True'
+    title: Si4463 Bench Packet Decoder
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+blocks:
+- name: wav_file
+  id: variable
+  parameters:
+    comment: 'EDIT ME: full path to the .wav baseband recording exported by SDR++''s recorder module.
+      It must be a capture that actually contains the bursts -- check the SDR++ waterfall before recording.'
+    value: '''C:\\Users\\np841\\Downloads\\baseband_435001000Hz_15-03-22_26-08-2026.wav'''
+  states:
+    coordinate:
+    - 16
+    - 12
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: 'Read from the WAV header, not hard-coded: SDR++ puts the centre frequency in the filename,
+      not the sample rate, and an RTL-SDR capture is 2.4 MS/s. Guessing this wrong rescales the decimation,
+      the filter cutoffs and the samples-per-symbol all at once.'
+    value: __import__("wave").open(wav_file).getframerate()
+  states:
+    coordinate:
+    - 160
+    - 12
+    rotation: 0
+    state: enabled
+- name: symbol_rate
+  id: variable
+  parameters:
+    comment: From si4463_config.h -- Rsymb 10000 sps, 2GFSK = 1 bit/symbol = 10 kbps
+    value: '10000'
+  states:
+    coordinate:
+    - 304
+    - 12
+    rotation: 0
+    state: enabled
+- name: deviation
+  id: variable
+  parameters:
+    comment: From si4463_config.h -- peak Fdev 20000 Hz (MODEM_FREQ_DEV = 0x000576, outdiv 8, 30 MHz XO)
+    value: '20000'
+  states:
+    coordinate:
+    - 448
+    - 12
+    rotation: 0
+    state: enabled
+- name: center_offset
+  id: variable
+  parameters:
+    comment: Hz to shift the recording by to put the burst at 0 Hz. The Si4463 sits on 435.000 MHz and
+      this file is centred on 435.001 MHz, so nominally -1000 -- but the RTL-SDR LO is about 11.6 kHz
+      low, and the burst measures -12.6 kHz. The low-pass is wide enough that this only has to be right
+      to within a few tens of kHz; the decoder block removes the remainder burst by burst.
+    value: '-12600'
+  states:
+    coordinate:
+    - 592
+    - 12
+    rotation: 0
+    state: enabled
+- name: decim
+  id: variable
+  parameters:
+    comment: Decimate down toward ~200 ksps. At 2.4 MS/s this is 12, giving 20 samples per symbol.
+    value: max(1, int(samp_rate / 200000))
+  states:
+    coordinate:
+    - 16
+    - 84
+    rotation: 0
+    state: enabled
+- name: decim_rate
+  id: variable
+  parameters:
+    comment: Sample rate after decimation; feeds the decoder block
+    value: samp_rate / decim
+  states:
+    coordinate:
+    - 176
+    - 84
+    rotation: 0
+    state: enabled
+- name: blocks_wavfile_source_0
+  id: blocks_wavfile_source
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: 'SDR++ baseband WAV recordings are 2-channel: ch0 (left) = I, ch1 (right) = Q'
+    file: wav_file
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nchan: '2'
+    repeat: 'False'
+  states:
+    coordinate:
+    - 16
+    - 156
+    rotation: 0
+    state: enabled
+- name: blocks_float_to_complex_0
+  id: blocks_float_to_complex
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    vlen: '1'
+  states:
+    coordinate:
+    - 216
+    - 148
+    rotation: 0
+    state: enabled
+- name: freq_xlating_fir_filter_xxx_0
+  id: freq_xlating_fir_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    center_freq: center_offset
+    comment: Recentres the burst near 0 Hz, low-pass filters and decimates. The 60 kHz passband is deliberately
+      wider than the 45 kHz burst so tens of kHz of dongle LO error still gets through.
+    decim: decim
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: samp_rate
+    taps: firdes.low_pass(1, samp_rate, 60e3, 25e3)
+    type: ccf
+  states:
+    coordinate:
+    - 416
+    - 140
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nEmbedded Python Block: Si4463 bench-test packet extractor.\n\nTakes the *complex*\
+      \ baseband stream from the frequency-translating filter,\nfinds each transmit burst by its power\
+      \ envelope, removes the residual carrier\noffset burst-by-burst, FSK-demodulates through a matched\
+      \ filter, recovers\nsymbol timing by taking the sample phase with the widest eye, and prints each\n\
+      45-byte payload decoded as a SensorPacket_t.\n\nThree things about the on-air format that a generic\
+      \ FSK receiver has to get\nright, all of them documented in Core/Inc/si4463_config.h:\n\n  * The\
+      \ sync word on air is 0x2D 0xD4, not the 0xB4 0x2B that appears in\n    SYNC_BITS_31_24/23_16. AN626\
+      \ 3.2.3: preamble and sync bytes always go out\n    LSB-first regardless of BIT_ORDER, so each register\
+      \ byte is bit-reversed\n    on its way to the antenna. Only the data field follows BIT_ORDER, which\
+      \ is\n    0 here, so payload bytes are MSB-first and need no reversal.\n  * The preamble is 16 bytes\
+      \ of 0xAA (PREAMBLE_TX_LENGTH=0x10 with\n    PREAMBLE_CONFIG bit D4 set, i.e. the length is in bytes,\
+      \ not nibbles), so\n    128 alternating bits precede the sync word. Requiring some of that run\n\
+      \    before accepting a sync match is what keeps noise from producing false\n    packets: a bare\
+      \ 16-bit sync pattern turns up by chance roughly every 65 k\n    bits, which over a multi-second\
+      \ capture is many times per file.\n  * Whitening is off (PKT_FIELD_1_CONFIG=0x04 is PN_START, not\
+      \ WHITEN), so the\n    payload is on air verbatim and needs no de-scrambling.\n\nThe frame is therefore\
+      \ 16 x 0xAA, then 0x2D 0xD4, then 45 payload bytes with\nno CRC appended (PKT_FIELD_1_CRC_CONFIG=0x80\
+      \ enables the CRC engine but does\nnot set SEND_CRC) -- 63 bytes, 50.4 ms at 10 kbps.\n\"\"\"\n\n\
+      import struct\n\nimport numpy as np\nfrom gnuradio import gr\n\n# 0x2D 0xD4, MSB-first, as it appears\
+      \ on air.\nSYNC_BITS = '0010110111010100'\n\n# How much of the 128-bit 0xAA preamble must immediately\
+      \ precede a sync match\n# for it to be believed. 32 bits leaves plenty of the run unexamined, so\
+      \ a late\n# burst edge or a slow AGC does not cost a packet, while still making a chance\n# hit\
+      \ vanishingly unlikely.\nPREAMBLE_CHECK_BITS = 32\n\n\nclass blk(gr.sync_block):\n    def __init__(self,\
+      \ decim_rate=200000, symbol_rate=10000, deviation=20000,\n                 packet_len_bytes=45,\
+      \ burst_threshold_db=6.0):\n        gr.sync_block.__init__(self, name='Si4463 Packet Decoder',\n\
+      \                               in_sig=[np.complex64], out_sig=None)\n        self.fs = float(decim_rate)\n\
+      \        self.symbol_rate = float(symbol_rate)\n        self.deviation = float(deviation)\n    \
+      \    self.sps = self.fs / self.symbol_rate\n        self.packet_len_bytes = int(packet_len_bytes)\n\
+      \        self.burst_threshold_db = float(burst_threshold_db)\n        self._chunks = []\n\n    def\
+      \ work(self, input_items, output_items):\n        self._chunks.append(input_items[0].copy())\n \
+      \       return len(input_items[0])\n\n    def stop(self):\n        self._decode()\n        self._chunks\
+      \ = []\n        return True\n\n    # ------------------------------------------------------------------\n\
+      \    # burst detection\n    # ------------------------------------------------------------------\n\
+      \n    def _find_bursts(self, x):\n        \"\"\"Return (start, stop) sample indices of each candidate\
+      \ burst.\"\"\"\n        win = max(1, int(self.sps / 2))\n        env = np.convolve(np.abs(x) **\
+      \ 2, np.ones(win) / win, mode='same')\n        floor = np.median(env)\n        if floor <= 0:\n\
+      \            return []\n        thresh = floor * 10.0 ** (self.burst_threshold_db / 10.0)\n\n  \
+      \      hot = env > thresh\n        if not hot.any():\n            return []\n        edges = np.diff(hot.astype(np.int8))\n\
+      \        starts = list(np.where(edges == 1)[0] + 1)\n        stops = list(np.where(edges == -1)[0]\
+      \ + 1)\n        if hot[0]:\n            starts.insert(0, 0)\n        if hot[-1]:\n            stops.append(len(hot))\n\
+      \n        # A fade part-way through a burst drops the envelope below the\n        # threshold and\
+      \ splits one packet into two fragments, neither of which\n        # holds a whole preamble+sync+payload.\
+      \ Rejoin anything separated by\n        # less than a tenth of a frame before applying the length\
+      \ test.\n        merged = []\n        max_gap = int(50 * self.sps)\n        for a, b in zip(starts,\
+      \ stops):\n            if merged and a - merged[-1][1] <= max_gap:\n                merged[-1][1]\
+      \ = b\n            else:\n                merged.append([a, b])\n\n        # A whole frame is 63\
+      \ bytes; insist on at least the preamble plus sync\n        # so a brief spur cannot masquerade\
+      \ as a packet.\n        min_len = int(18 * 8 * self.sps)\n        guard = int(4 * self.sps)\n  \
+      \      return [(max(0, a - guard), min(len(x), b + guard))\n                for a, b in merged if\
+      \ b - a >= min_len]\n\n    # ------------------------------------------------------------------\n\
+      \    # demodulation\n    # ------------------------------------------------------------------\n\n\
+      \    def _demod(self, x):\n        \"\"\"FSK-demodulate and remove the residual carrier offset.\n\
+      \n        The offset between the recording's centre and the transmitter shows up\n        as a DC\
+      \ term on the demodulated stream, and the slicer has to sit at\n        zero for the bits to come\
+      \ out right. Estimate it as the midpoint\n        between the two FSK rails, taken as robust percentiles,\
+      \ rather than as\n        the mean or median of the stream: a burst whose payload happens to\n \
+      \       carry more ones than zeros drags mean and median toward the majority\n        rail, which\
+      \ biases every subsequent decision. The rail midpoint does\n        not care how the symbols are\
+      \ distributed.\n        \"\"\"\n        d = np.angle(x[1:] * np.conj(x[:-1])) * (self.fs / (2 *\
+      \ np.pi * self.deviation))\n        lo, hi = np.percentile(d, (10, 90))\n        d = d - 0.5 * (lo\
+      \ + hi)\n        # Matched filter for the NRZ symbols: integrate over one symbol period\n      \
+      \  # rather than slicing a single sample. Picking one sample out of every\n        # twenty throws\
+      \ away 13 dB of the available energy and is what leaves\n        # scattered single-bit errors in\
+      \ an otherwise good burst.\n        n = max(1, int(round(self.sps)))\n        return np.convolve(d,\
+      \ np.ones(n) / n, mode='same')\n\n    def _sample(self, d, phase, polarity):\n        \"\"\"Sample\
+      \ `d` at symbol centres, allowing a fractional start phase.\"\"\"\n        n = int((len(d) - phase)\
+      \ / self.sps)\n        if n <= 0:\n            return np.empty(0, dtype=np.float32)\n        pos\
+      \ = phase + np.arange(n) * self.sps\n        return np.interp(pos, np.arange(len(d)), d) * polarity\n\
+      \n    def _bits_at_phase(self, d, phase, polarity):\n        v = self._sample(d, phase, polarity)\n\
+      \        return ''.join('1' if q > 0 else '0' for q in v)\n\n    # ------------------------------------------------------------------\n\
+      \    # framing\n    # ------------------------------------------------------------------\n\n   \
+      \ def _extract(self, bits):\n        \"\"\"Yield payloads for every preamble-backed sync match in\
+      \ `bits`.\"\"\"\n        need = self.packet_len_bytes * 8\n        out = []\n        i = 0\n   \
+      \     while True:\n            i = bits.find(SYNC_BITS, i)\n            if i < 0 or i + 16 + need\
+      \ > len(bits):\n                break\n            pre = bits[max(0, i - PREAMBLE_CHECK_BITS):i]\n\
+      \            # Count transitions rather than demanding a perfect run: a marginal\n            #\
+      \ burst puts the odd bit error in the preamble too, and insisting\n            # on all 31 transitions\
+      \ throws away packets that decode fine. Three\n            # slips still leaves the chance of noise\
+      \ faking both this and the\n            # 16-bit sync at around 1e-11 per bit position.\n      \
+      \      ok = (len(pre) == PREAMBLE_CHECK_BITS and\n                  sum(pre[k] != pre[k + 1] for\
+      \ k in range(len(pre) - 1))\n                  >= PREAMBLE_CHECK_BITS - 4)\n            if ok:\n\
+      \                pb = bits[i + 16:i + 16 + need]\n                out.append((i, bytes(int(pb[b:b\
+      \ + 8], 2)\n                                     for b in range(0, need, 8))))\n               \
+      \ i += 16 + need\n            else:\n                i += 1\n        return out\n\n    def _best_framing(self,\
+      \ d):\n        \"\"\"Recover symbol timing, then frame.\n\n        With the matched filter in place\
+      \ the mean magnitude of the sampled\n        stream peaks at the correct symbol phase -- that is\
+      \ the eye opening --\n        so rank the quarter-sample phases by it and try the most open ones\n\
+      \        first instead of taking whichever phase happens to frame.\n\n        Both polarities are\
+      \ tried because an I/Q swap in the recording, or\n        MODEM_MAP_CONTROL's TX_INV bit, flips\
+      \ the sense of the demodulator\n        output and turns every bit upside down.\n        \"\"\"\n\
+      \        phases = np.arange(0.0, self.sps, 0.25)\n        ranked = []\n        for polarity in (1,\
+      \ -1):\n            for phase in phases:\n                v = self._sample(d, phase, polarity)\n\
+      \                if len(v):\n                    ranked.append((float(np.mean(np.abs(v))), polarity,\
+      \ float(phase)))\n        ranked.sort(reverse=True)\n\n        for _, polarity, phase in ranked:\n\
+      \            got = self._extract(self._bits_at_phase(d, phase, polarity))\n            if got:\n\
+      \                return got, polarity, phase\n        return [], None, None\n\n    # ------------------------------------------------------------------\n\
+      \n    def _decode(self):\n        if not self._chunks:\n            print('No samples reached the\
+      \ decoder.')\n            return\n        x = np.concatenate(self._chunks)\n        dur = len(x)\
+      \ / self.fs\n        print('Captured %.2f s at %.0f Hz (%.1f samples/symbol).'\n              %\
+      \ (dur, self.fs, self.sps))\n\n        bursts = self._find_bursts(x)\n        if not bursts:\n \
+      \           print('No burst found %.1f dB above the noise floor.'\n                  % self.burst_threshold_db)\n\
+      \            self._report_spectrum(x)\n            return\n\n        print('Found %d burst(s):'\
+      \ % len(bursts))\n        found = 0\n        for n, (a, b) in enumerate(bursts, 1):\n          \
+      \  seg = x[a:b]\n            print('  burst %d: t=%.3f s, %.1f ms'\n                  % (n, a /\
+      \ self.fs, (b - a) / self.fs * 1000.0))\n            packets, polarity, phase = self._best_framing(self._demod(seg))\n\
+      \            if not packets:\n                print('    no preamble+sync match -- burst too weak,\
+      \ or the '\n                      'symbol rate / deviation do not match the transmitter.')\n   \
+      \             continue\n            for off, payload in packets:\n                found += 1\n \
+      \               print('    packet %d (polarity %+d, phase %.2f):'\n                      % (found,\
+      \ polarity, phase))\n                print('      ' + payload.hex(' '))\n                self._report_packet(payload)\n\
+      \n        if found == 0:\n            print('Bursts were found but none framed. Check symbol_rate,\
+      \ '\n                  'deviation, and that center_offset puts the signal inside '\n           \
+      \       'the low-pass filter.')\n            self._report_spectrum(x)\n\n    # ------------------------------------------------------------------\n\
+      \    # reporting\n    # ------------------------------------------------------------------\n\n \
+      \   def _report_packet(self, payload):\n        \"\"\"Decode the SensorPacket_t in Core/Inc/sensor_packet.h.\n\
+      \n        26 packed little-endian bytes; the rest of the 45-byte frame is 0xC3\n        padding,\
+      \ which main.c uses instead of 0x00 to keep the tail\n        DC-balanced.\n        \"\"\"\n   \
+      \     if len(payload) < 26:\n            return\n        (counter, temp, hum, lat, lon, wind, direction)\
+      \ = struct.unpack(\n            '<IfffffH', payload[:26])\n        pad = payload[26:]\n        pad_ok\
+      \ = all(c == 0xC3 for c in pad)\n        print('      counter=%u temp=%.1f C hum=%.1f %% lat=%.5f\
+      \ lon=%.5f '\n              'wind=%.1f m/s dir=%u deg' % (counter, temp, hum, lat, lon,\n      \
+      \                                      wind, direction))\n        if not pad_ok:\n            print('\
+      \      WARNING: tail padding is not all 0xC3 -- bit errors '\n                  'in this packet.')\n\
+      \n    def _report_spectrum(self, x):\n        \"\"\"Print where the energy actually is, so center_offset\
+      \ can be fixed.\"\"\"\n        n = 1 << 14\n        if len(x) < n:\n            return\n       \
+      \ acc = np.zeros(n)\n        step = max(n, len(x) // 64)\n        for k in range(0, len(x) - n,\
+      \ step):\n            acc += np.abs(np.fft.fft(x[k:k + n] * np.hanning(n))) ** 2\n        acc =\
+      \ np.fft.fftshift(acc)\n        f = np.fft.fftshift(np.fft.fftfreq(n, 1.0 / self.fs))\n        #\
+      \ Ignore the SDR's DC spike when looking for the signal.\n        mask = np.abs(f) > 2 * self.symbol_rate\n\
+      \        peak = f[mask][int(np.argmax(acc[mask]))]\n        print('Strongest energy still inside\
+      \ the passband sits %+0.0f Hz from '\n              'the filter centre; if that is the transmitter,\
+      \ add it to '\n              'center_offset.' % peak)\n        print('That figure only covers what\
+      \ the low-pass let through, so it '\n              'cannot see a signal the filter already removed.\
+      \ If it does not '\n              'lead anywhere, open the recording in SDR++ or an FFT and read\
+      \ '\n              'the burst offset off the waterfall directly, then check the '\n            \
+      \  'recording actually contains the bursts at all -- a capture '\n              'centred on the\
+      \ wrong frequency looks exactly like a dead '\n              'transmitter from in here.')\n"
+    _io_cache: '(''Si4463 Packet Decoder'', ''blk'', [(''decim_rate'', ''200000''), (''symbol_rate'',
+      ''10000''), (''deviation'', ''20000''), (''packet_len_bytes'', ''45''), (''burst_threshold_db'',
+      ''6.0'')], [(''in'', ''complex'', 1)], [], ''Embedded Python Block: Si4463 bench-test packet extractor.'',
+      [])'
+    affinity: ''
+    alias: ''
+    comment: Burst-gates, de-rotates, demodulates and frames in one place. Takes complex in rather than
+      a Quadrature Demod float so it can find the bursts by their power envelope and measure the residual
+      carrier offset per burst.
+    decim_rate: decim_rate
+    symbol_rate: symbol_rate
+    deviation: deviation
+    packet_len_bytes: '45'
+    burst_threshold_db: '6.0'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    coordinate:
+    - 656
+    - 148
+    rotation: 0
+    state: enabled
+connections:
+- - blocks_wavfile_source_0
+  - '0'
+  - blocks_float_to_complex_0
+  - '0'
+- - blocks_wavfile_source_0
+  - '1'
+  - blocks_float_to_complex_0
+  - '1'
+- - blocks_float_to_complex_0
+  - '0'
+  - freq_xlating_fir_filter_xxx_0
+  - '0'
+- - freq_xlating_fir_filter_xxx_0
+  - '0'
+  - epy_block_0
+  - '0'
+metadata:
+  file_format: 1
+  grc_version: 3.10.9.2

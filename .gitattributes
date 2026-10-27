@@ -1,0 +1,14 @@
+# Everything in this repository runs on Linux, so a checkout must be LF no
+# matter what the cloning client's core.autocrlf happens to be set to.
+#
+# This is not a style preference. A CR after "#!/usr/bin/env bash" is not a
+# shebang: the kernel looks for an interpreter called "bash\r", fails to find
+# it, and the script does not run at all. The same applies to the python3
+# shebangs. Checking out on a Windows machine with autocrlf=true - which is
+# the Git for Windows default - would do exactly that, so the rule is pinned
+# here in the repo rather than left to each clone's configuration.
+* text=auto eol=lf
+
+# The reference capture is binary. Line-ending conversion would corrupt it,
+# and git's own binary detection is a heuristic rather than a guarantee.
+*.wav binary

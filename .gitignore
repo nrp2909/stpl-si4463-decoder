@@ -1,0 +1,10 @@
+# Packet logs. Every run writes one; they are data, not source.
+logs/
+
+# Generated from si4463-decoder.service.in by install.sh, with this machine's
+# user and path filled in. Machine-specific, so not tracked.
+si4463-decoder.service
+
+__pycache__/
+*.py[cod]
+*.egg-info/
