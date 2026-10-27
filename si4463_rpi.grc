@@ -1,0 +1,442 @@
+options:
+  parameters:
+    author: Neeraj
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: |-
+      Diagnostic flowgraph for the Si4463 telemetry link on a
+      Raspberry Pi 5 with an RTL-SDR Blog V3.
+
+      This is the see-it version, not the deployment version. The
+      headless decoder is si4463_rt.py, which needs only numpy and
+      no GNU Radio at all; use that to actually run the link. Use
+      this when something is wrong and you need to look at the
+      signal: the three sinks answer, in order, "is the burst
+      there and is DC clear of it", "are the bursts arriving on
+      time", and "is the gain right".
+
+      Needs a desktop session or VNC on the Pi, plus
+          sudo apt install gnuradio gr-osmosdr
+    copyright: ''
+    description: Si4463 telemetry decoder with live spectrum, waterfall and burst envelope
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: qt_gui
+    hier_block_src_path: '.:'
+    id: si4463_rpi
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: prompt
+    sizing_mode: fixed
+    thread_safe_setting: 'True'
+    title: Si4463 Telemetry Decoder (Raspberry Pi)
+    window_size: (1400,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 8
+    rotation: 0
+    state: enabled
+blocks:
+- name: freq
+  id: variable
+  parameters:
+    comment: |-
+      Transmitter centre frequency. The Si4463 at FREQ_CONTROL_INTE=57,
+      FRAC=0x080000, outdiv 8.
+    value: 435.000e6
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 100
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: |-
+      RTL2832 supports 225001-300000 and 900001-3200000 only.
+      1.2 MS/s is 28.8 MHz / 24 exactly.
+    value: 1.2e6
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 184
+    - 100
+    rotation: 0
+    state: enabled
+- name: lo_offset
+  id: variable
+  parameters:
+    comment: |-
+      Park the LO this far above the signal and shift back down in the
+      filter, so the dongle DC spike never sits on the packet.
+    value: 100e3
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 352
+    - 100
+    rotation: 0
+    state: enabled
+- name: ppm
+  id: variable
+  parameters:
+    comment: |-
+      The RTL-SDR Blog V3 has a 1 ppm TCXO, which at 433 MHz is 435 Hz,
+      so 0 is genuinely right. The 60 kHz passband tolerates far more.
+    value: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 568
+    - 100
+    rotation: 0
+    state: enabled
+- name: symbol_rate
+  id: variable
+  parameters:
+    comment: Si4463 MODEM_DATA_RATE
+    value: '10000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 172
+    rotation: 0
+    state: enabled
+- name: deviation
+  id: variable
+  parameters:
+    comment: Si4463 MODEM_FREQ_DEV, +/-20 kHz
+    value: '20000'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 184
+    - 172
+    rotation: 0
+    state: enabled
+- name: threshold_db
+  id: variable
+  parameters:
+    comment: Burst detection threshold above the rolling noise floor, in dB.
+    value: '3.0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 352
+    - 172
+    rotation: 0
+    state: enabled
+- name: decim
+  id: variable
+  parameters:
+    comment: Decimate toward 200 kS/s, which is 20 samples per symbol at 10 kbps.
+    value: max(1, int(round(samp_rate / 200000)))
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 568
+    - 172
+    rotation: 0
+    state: enabled
+- name: decim_rate
+  id: variable
+  parameters:
+    comment: Rate after decimation; feeds the decoder and the narrowband sinks.
+    value: samp_rate / decim
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 800
+    - 172
+    rotation: 0
+    state: enabled
+- name: gain
+  id: variable_qtgui_range
+  parameters:
+    comment: |-
+      Tuner gain. Start at 0 and raise only until packets are solid,
+      watching the time sink: the burst should peak near 0.5 and never
+      pin at 1.0. An RTL-SDR front end clips near -10 dBm with no gain
+      at all, and over this link it already sees about -11 dBm at 2 m.
+    gui_hint: 3,0,1,1
+    label: '"Tuner gain (dB)"'
+    min_len: '200'
+    orient: Qt.Horizontal
+    rangeType: float
+    start: '0'
+    step: '0.9'
+    stop: '49.6'
+    value: '0'
+    widget: counter_slider
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 800
+    - 92
+    rotation: 0
+    state: enabled
+- name: osmosdr_source_0
+  id: osmosdr_source
+  parameters:
+    ant0: ''
+    args: '"numchan=1"'
+    bb_gain0: '0'
+    bw0: '0'
+    comment: |-
+      RTL-SDR Blog V3. Manual gain, not AGC: the tuner AGC hunts during
+      the 1.07 s of silence between bursts and is still recovering when
+      the next preamble arrives, which costs the start of the packet.
+    corr0: ppm
+    dc_offset_mode0: '0'
+    freq0: freq + lo_offset
+    gain0: gain
+    gain_mode0: 'False'
+    if_gain0: '0'
+    iq_balance_mode0: '0'
+    nchan: '1'
+    num_mboards: '1'
+    sample_rate: samp_rate
+    sync: sync
+    type: fc32
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 8
+    - 316
+    rotation: 0
+    state: enabled
+- name: freq_xlating_fir_filter_xxx_0
+  id: freq_xlating_fir_filter_xxx
+  parameters:
+    center_freq: -lo_offset
+    comment: |-
+      Shifts the band of interest to DC, low-passes and decimates in one
+      operation. The 60 kHz passband is deliberately wider than the
+      45 kHz burst so tens of kHz of LO error still gets through.
+    decim: decim
+    samp_rate: samp_rate
+    taps: firdes.low_pass(1, samp_rate, 60e3, 25e3)
+    type: ccf
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 400
+    - 332
+    rotation: 0
+    state: enabled
+- name: qtgui_freq_sink_x_0
+  id: qtgui_freq_sink_x
+  parameters:
+    autoscale: 'False'
+    average: '0.2'
+    bw: samp_rate
+    comment: |-
+      Wideband, straight off the dongle. The burst should sit
+      lo_offset below centre, with the DC spike at centre and clear of
+      it. If the spike is on top of the burst, lo_offset is wrong.
+    fc: freq + lo_offset
+    fftsize: '2048'
+    grid: 'True'
+    gui_hint: 0,0,1,1
+    label1: off the dongle
+    name: '"Wideband spectrum - is the burst there, is DC clear of it?"'
+    nconnections: '1'
+    type: complex
+    update_time: '0.10'
+    ymax: '0'
+    ymin: '-120'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 680
+    - 236
+    rotation: 0
+    state: enabled
+- name: qtgui_waterfall_sink_x_0
+  id: qtgui_waterfall_sink_x
+  parameters:
+    bw: decim_rate
+    comment: |-
+      Narrowband, after the filter. Bursts should appear as regular
+      stripes about 1.12 s apart, centred at 0 Hz. A gap is a packet
+      that did not arrive; drift off centre is tuner error.
+    fc: '0'
+    fftsize: '1024'
+    gui_hint: 1,0,1,1
+    name: '"Waterfall - burst timing and centring"'
+    nconnections: '1'
+    type: complex
+    update_time: '0.10'
+    zmax: '0'
+    zmin: '-120'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 680
+    - 388
+    rotation: 0
+    state: enabled
+- name: qtgui_time_sink_x_0
+  id: qtgui_time_sink_x
+  parameters:
+    autoscale: 'False'
+    comment: |-
+      Burst envelope. Set the gain slider so the burst peaks near 0.5.
+      Pinned at 1.0 means the front end is clipping, which raises the
+      noise floor and reads in the packet log exactly like a weak
+      signal. Triggered on magnitude so the burst holds still.
+    grid: 'True'
+    gui_hint: 2,0,1,1
+    label1: I
+    label2: Q
+    name: '"Burst envelope - is the gain right?"'
+    nconnections: '1'
+    size: '4096'
+    srate: decim_rate
+    tr_chan: '0'
+    tr_delay: '0'
+    tr_level: '0.05'
+    tr_mode: qtgui.TRIG_MODE_NORM
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: complex
+    update_time: '0.10'
+    ymax: '1'
+    ymin: '-1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 680
+    - 540
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: |
+      """
+      Si4463 packet decoder.
+
+      The implementation lives in si4463_gr_block.py beside this flowgraph, so that
+      it can be imported, unit-tested and diffed as ordinary source instead of as an
+      escaped string inside the .grc. This subclass exists only to give GRC an
+      __init__ to introspect for the parameter dialog.
+      """
+
+      import os
+      import sys
+
+      _here = os.path.dirname(os.path.abspath(globals().get('__file__', '.'))) \
+          if globals().get('__file__') else os.getcwd()
+      if _here not in sys.path:
+          sys.path.insert(0, _here)
+
+      # The module is imported, not the class. If the class were pulled into this
+      # namespace, GRC would find two gr.block subclasses here and instantiate
+      # whichever came first in dict order -- which is the imported base, not blk.
+      # Importing only the module leaves blk as the single candidate, so GRC's choice
+      # is determined by this file rather than by name-resolution order.
+      import si4463_gr_block
+
+
+      class blk(si4463_gr_block.Si4463Sink):
+          def __init__(self, decim_rate=200000, symbol_rate=10000, deviation=20000,
+                       packet_len_bytes=45, burst_threshold_db=3.0,
+                       heartbeat_s=30.0, csv_path=None):
+              si4463_gr_block.Si4463Sink.__init__(
+                  self, decim_rate=decim_rate, symbol_rate=symbol_rate,
+                  deviation=deviation, packet_len_bytes=packet_len_bytes,
+                  burst_threshold_db=burst_threshold_db, heartbeat_s=heartbeat_s,
+                  csv_path=csv_path)
+    affinity: ''
+    alias: ''
+    burst_threshold_db: threshold_db
+    comment: |-
+      The decoder. Identical code to the headless si4463_rt.py path --
+      si4463_core.py knows nothing about GNU Radio -- so a packet that
+      decodes here decodes there, and vice versa.
+    csv_path: None
+    decim_rate: decim_rate
+    deviation: deviation
+    heartbeat_s: '30.0'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    packet_len_bytes: '45'
+    symbol_rate: symbol_rate
+  states:
+    _io_cache: ''
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate:
+    - 1056
+    - 348
+    rotation: 0
+    state: enabled
+connections:
+- - osmosdr_source_0
+  - '0'
+  - freq_xlating_fir_filter_xxx_0
+  - '0'
+- - osmosdr_source_0
+  - '0'
+  - qtgui_freq_sink_x_0
+  - '0'
+- - freq_xlating_fir_filter_xxx_0
+  - '0'
+  - qtgui_waterfall_sink_x_0
+  - '0'
+- - freq_xlating_fir_filter_xxx_0
+  - '0'
+  - qtgui_time_sink_x_0
+  - '0'
+- - freq_xlating_fir_filter_xxx_0
+  - '0'
+  - epy_block_0
+  - '0'
+metadata:
+  file_format: 1
+  grc_version: 3.10.12.0

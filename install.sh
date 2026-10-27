@@ -11,6 +11,12 @@
 # Avoiding pip avoids that whole argument, and the apt numpy is the faster one
 # on ARM in any case.
 #
+# GNU Radio is NOT installed by this script. It is needed only by the
+# diagnostic flowgraph (si4463_rpi.grc), is about 1.5 GB, and the decoder
+# does not import it. Install it separately if you want the live spectrum:
+#
+#     sudo apt install gnuradio gr-osmosdr
+#
 # Safe to re-run; every step checks before it acts.
 
 set -euo pipefail
@@ -170,7 +176,8 @@ fi
 say "Decoder"
 cd "${HERE}"
 chmod +x si4463_rt.py si4463_benchmark.py si4463_tnc.py \
-         si4463_selftest.py si4463_dsp_selftest.py si4463_rt.sh 2>/dev/null || true
+         si4463_selftest.py si4463_dsp_selftest.py si4463_check_capture.py \
+         si4463_gr_block.py si4463_rt.sh si4463_grc.sh 2>/dev/null || true
 ok "scripts made executable"
 
 python3 -c 'import numpy; print("   ok    numpy " + numpy.__version__)'
@@ -202,6 +209,38 @@ else
     bad "reference capture failed:"; sed 's/^/        /' /tmp/wav.$$
 fi
 rm -f /tmp/wav.$$
+
+say "GNU Radio (optional, for the diagnostic flowgraph)"
+# Reported, not installed. The flowgraph is a diagnostic tool and the decoder
+# does not need it, so pulling in 1.5 GB on every install would be the wrong
+# default - but saying nothing would leave someone wondering why
+# ./si4463_grc.sh does not work.
+if command -v gnuradio-companion >/dev/null 2>&1; then
+    ok "gnuradio-companion present ($(python3 -c 'from gnuradio import gr; print(gr.version())' 2>/dev/null || echo 'version unknown'))"
+    if python3 -c 'import osmosdr' 2>/dev/null; then
+        ok "osmosdr bindings present -- ./si4463_grc.sh will work"
+    else
+        warn "gnuradio is installed but osmosdr is not:"
+        warn "    sudo apt install gr-osmosdr"
+    fi
+    # Proves the flowgraph loads and that every block and parameter resolves on
+    # this machine - the same check used while it was written. PYTHONPATH is
+    # set for the reason si4463_grc.sh explains at length.
+    if command -v grcc >/dev/null 2>&1; then
+        if PYTHONPATH="${HERE}" grcc -o /tmp "${HERE}/si4463_rpi.grc" >/tmp/grcc.$$ 2>&1; then
+            ok "si4463_rpi.grc compiles (grcc)"
+        else
+            warn "si4463_rpi.grc did not compile:"
+            sed 's/^/        /' /tmp/grcc.$$ | head -8
+        fi
+        rm -f /tmp/grcc.$$ /tmp/si4463_rpi.py /tmp/si4463_rpi_epy_block_0.py
+    fi
+else
+    ok "not installed -- and not needed for the decoder"
+    echo "         For the live spectrum / waterfall / scope view:"
+    echo "             sudo apt install gnuradio gr-osmosdr   # ~1.5 GB"
+    echo "             ./si4463_grc.sh"
+fi
 
 say "Choosing a sample rate for this Pi"
 # The port's real question. The chain uses one core; what matters is whether

@@ -28,6 +28,11 @@ The result depends on **numpy and nothing else**. No pip, no virtualenv — whic
 also sidesteps Bookworm's PEP 668 "externally-managed-environment" refusal,
 since `python3-numpy` comes from apt and is the faster build on ARM anyway.
 
+GNU Radio is back, but only as an *optional diagnostic* — see
+[the flowgraph section](#seeing-the-signal-the-gnu-radio-flowgraph). It is not
+installed by `install.sh`, the decoder does not import it, and the headless
+path still runs on a clean image with numpy alone.
+
 The original GNU Radio flowgraph is kept in `reference/` for provenance. It
 documents the physical layer at length and is what the numpy chain was written
 against. Nothing imports it and it is not needed to run anything.
@@ -165,6 +170,75 @@ sudo systemctl enable --now si4463-decoder
 journalctl -u si4463-decoder -f
 ```
 
+## Seeing the signal: the GNU Radio flowgraph
+
+`si4463_rt.py` tells you what decoded. When nothing decodes, that is exactly
+the information you do not have — and "no packets" looks identical whether the
+transmitter is off, the gain is wrong, the tuning is off, or the Pi is dropping
+samples. `si4463_rpi.grc` is the answer to that: the same chain with three Qt
+sinks attached, so you can look at the signal.
+
+```bash
+sudo apt install gnuradio gr-osmosdr    # ~1.5 GB, only for this
+./si4463_grc.sh
+```
+
+Three views, each answering one question:
+
+| View | Question it answers |
+|------|---------------------|
+| **Wideband spectrum** (1.2 MHz, off the dongle) | Is the burst there at all, and is the DC spike clear of it? The burst should sit `lo_offset` below centre with the spike at centre. |
+| **Waterfall** (200 kHz, after the filter) | Are bursts arriving on time? They appear as regular stripes ~1.12 s apart, centred at 0 Hz. A gap is a lost packet; drift off centre is tuner error. |
+| **Burst envelope** (scope, triggered) | Is the gain right? The burst should peak near 0.5 and never pin at 1.0. Clipping raises the noise floor and reads in the log exactly like a weak signal. |
+
+There is a live **tuner gain** slider, because setting gain against the
+envelope view is the whole point. The scope is normal-mode triggered on a
+rising edge at 0.05 — without a trigger the display is mostly the 95% of the
+time nothing is transmitting, with the burst flashing past unreadably.
+
+This is a **diagnostic tool, not the deployment path.** It needs a desktop
+session, VNC or `ssh -X`, and GNU Radio. The headless decoder imports none of
+it. Keep using `si4463_rt.py` to actually run the link.
+
+### How it is put together
+
+The decoder block lives in `si4463_gr_block.py` as ordinary, importable source
+— **not** embedded in the `.grc`. GRC normally stores an Embedded Python
+Block's whole body as an escaped string inside the flowgraph file, which cannot
+be imported, cannot be tested, and produces unreadable diffs; the original
+bench flowgraph did that and carries a complete copy of the decoder inside it.
+Here the `.grc` embeds only a short subclass that forwards to the module, so
+`si4463_core.py` stays the single copy and a fix to it fixes the flowgraph too.
+
+Check GNU Radio itself, with no dongle and no display:
+
+```bash
+python3 si4463_gr_block.py test_current_layout.wav
+```
+
+That builds the flowgraph's chain minus the osmosdr source and the Qt sinks,
+and should decode the same 6 packets. It is how the GNU Radio path was verified
+before it ever saw an antenna.
+
+### Why `si4463_grc.sh` rather than opening the file directly
+
+GRC evaluates the decoder block's imports when it *loads* the flowgraph, in
+order to instantiate the block and discover its ports. If `si4463_gr_block` is
+not importable at that moment, GRC cannot find the ports and reports:
+
+```
+LookupError: sink key 0 not in sink block keys
+>>> Error: Connection between freq_xlating_fir_filter_xxx_0(0)
+    and epy_block_0(0) could not be made
+```
+
+which is a confusing way to be told the `PYTHONPATH` is wrong. Whether the
+import works depends on where `gnuradio-companion` was launched from — a
+desktop menu or another terminal, not necessarily this directory. The launcher
+sets both the working directory and `PYTHONPATH`, so the flowgraph opens from
+anywhere. It also checks for a display up front, rather than letting Qt fail
+with "could not connect to display" after a long pause.
+
 ## Will the Pi keep up?
 
 This is the question a port to a small machine has to answer, and the packet
@@ -250,6 +324,14 @@ si4463_rtlsdr.py            NEW. RTL-SDR via ctypes->librtlsdr (async), with an
                             rtl_sdr pipe fallback and a WAV replay source.
 si4463_rt.py                NEW. The live front end tying those together.
 si4463_benchmark.py         NEW. Does this Pi keep up?
+
+si4463_gr_block.py          NEW. GNU Radio sink block around the decoder,
+                            plus a headless self-test. The only file that
+                            imports gnuradio; nothing else depends on it.
+si4463_rpi.grc              NEW. Diagnostic flowgraph: spectrum, waterfall,
+                            burst envelope, live gain. Validated with grcc.
+si4463_grc.sh               NEW. Opens the flowgraph with CWD and PYTHONPATH
+                            set, so GRC can resolve the decoder block.
 
 si4463_selftest.py          decoder regression tests (unchanged)
 si4463_dsp_selftest.py      NEW. Tests for the numpy front end.
