@@ -4,18 +4,15 @@
 #
 # Set up the Si4463 decoder on Raspberry Pi OS / Debian Bookworm.
 #
-# Everything this installs comes from apt. There is deliberately no pip and no
-# virtualenv: the decoder needs numpy and nothing else, Bookworm ships numpy as
-# python3-numpy built against the system BLAS, and Bookworm's Python is marked
-# externally-managed (PEP 668) so "pip install numpy" into it fails anyway.
-# Avoiding pip avoids that whole argument, and the apt numpy is the faster one
-# on ARM in any case.
+# The decoder is a GNU Radio flowgraph: gr-osmosdr reads the dongle and GNU
+# Radio's own frequency-translating FIR does the filtering. Everything comes
+# from apt. There is deliberately no pip and no virtualenv: Bookworm's Python
+# is marked externally-managed (PEP 668), and apt's gnuradio is built against
+# the system VOLK, which is what makes the filter fast on ARM.
 #
-# GNU Radio is NOT installed by this script. It is needed only by the
-# diagnostic flowgraph (si4463_rpi.grc), is about 1.5 GB, and the decoder
-# does not import it. Install it separately if you want the live spectrum:
-#
-#     sudo apt install gnuradio gr-osmosdr
+# The gnuradio package is roughly 1.5 GB with its dependencies. That is the
+# price of the whole chain being GNU Radio, and it buys the diagnostic
+# flowgraph (si4463_rpi.grc) as well as the headless decoder.
 #
 # Safe to re-run; every step checks before it acts.
 
@@ -51,10 +48,10 @@ fi
 ok "kernel $(uname -r) on $(uname -m)"
 
 say "Packages"
-# python3-numpy    the only dependency the decoder has
-# rtl-sdr          rtl_test / rtl_sdr / rtl_biast, and the udev rules
-# librtlsdr0       the shared library si4463_rtlsdr.py opens with ctypes
-NEED=(python3-numpy rtl-sdr librtlsdr0)
+# gnuradio         the runtime: scheduler, filter blocks, firdes, VOLK
+# gr-osmosdr       osmosdr.source, which drives the RTL-SDR through librtlsdr
+# rtl-sdr          rtl_test / rtl_biast, and the udev rules
+NEED=(gnuradio gr-osmosdr rtl-sdr)
 # Optional, for the soundcard TNC path only. Not required by si4463_rt.py.
 OPTIONAL=(python3-sounddevice libportaudio2)
 
@@ -176,21 +173,20 @@ fi
 say "Decoder"
 cd "${HERE}"
 chmod +x si4463_rt.py si4463_benchmark.py si4463_tnc.py \
-         si4463_selftest.py si4463_dsp_selftest.py si4463_check_capture.py \
+         si4463_selftest.py si4463_check_capture.py \
          si4463_gr_block.py si4463_rt.sh si4463_grc.sh 2>/dev/null || true
 ok "scripts made executable"
 
-python3 -c 'import numpy; print("   ok    numpy " + numpy.__version__)'
-
-# The two test suites are the port's evidence that it works on this machine
-# before any antenna is involved: one covers the decoder, one covers the numpy
-# front end that replaced GNU Radio.
-if python3 si4463_dsp_selftest.py >/tmp/dsp.$$ 2>&1; then
-    ok "si4463_dsp_selftest.py: $(tail -1 /tmp/dsp.$$)"
+if python3 -c 'from gnuradio import gr; import osmosdr' >/dev/null 2>&1; then
+    ok "GNU Radio $(python3 -c 'from gnuradio import gr; print(gr.version())' 2>/dev/null) with gr-osmosdr"
 else
-    bad "si4463_dsp_selftest.py failed:"; sed 's/^/        /' /tmp/dsp.$$
+    bad "python3 cannot import gnuradio and osmosdr:"
+    python3 -c 'from gnuradio import gr; import osmosdr' 2>&1 | tail -3 | sed 's/^/        /'
+    exit 1
 fi
-rm -f /tmp/dsp.$$
+
+# The test suite and the reference capture are the evidence that it works on
+# this machine before any antenna is involved.
 
 if python3 si4463_selftest.py >/tmp/core.$$ 2>&1; then
     ok "si4463_selftest.py: $(tail -1 /tmp/core.$$)"
@@ -201,7 +197,8 @@ rm -f /tmp/core.$$
 
 # Decode the reference capture. This is the strongest check available without
 # a transmitter: a real 3.9 s recording containing six known packets, through
-# the identical chain the live path uses.
+# the identical GNU Radio chain the live path uses, with a wavfile_source in
+# place of the osmosdr source.
 if python3 si4463_rt.py --wav test_current_layout.wav --no-csv --heartbeat 0 \
         >/tmp/wav.$$ 2>&1; then
     ok "reference capture: $(grep -m1 'Stopped after' /tmp/wav.$$ || echo 'see /tmp')"
@@ -210,41 +207,25 @@ else
 fi
 rm -f /tmp/wav.$$
 
-say "GNU Radio (optional, for the diagnostic flowgraph)"
-# Reported, not installed. The flowgraph is a diagnostic tool and the decoder
-# does not need it, so pulling in 1.5 GB on every install would be the wrong
-# default - but saying nothing would leave someone wondering why
-# ./si4463_grc.sh does not work.
-if command -v gnuradio-companion >/dev/null 2>&1; then
-    ok "gnuradio-companion present ($(python3 -c 'from gnuradio import gr; print(gr.version())' 2>/dev/null || echo 'version unknown'))"
-    if python3 -c 'import osmosdr' 2>/dev/null; then
-        ok "osmosdr bindings present -- ./si4463_grc.sh will work"
+say "Diagnostic flowgraph"
+# Proves the flowgraph loads and that every block and parameter resolves on
+# this machine. PYTHONPATH is set for the reason si4463_grc.sh explains at
+# length.
+if command -v grcc >/dev/null 2>&1; then
+    if PYTHONPATH="${HERE}" grcc -o /tmp "${HERE}/si4463_rpi.grc" >/tmp/grcc.$$ 2>&1; then
+        ok "si4463_rpi.grc compiles (grcc) -- ./si4463_grc.sh will open it"
     else
-        warn "gnuradio is installed but osmosdr is not:"
-        warn "    sudo apt install gr-osmosdr"
+        warn "si4463_rpi.grc did not compile:"
+        sed 's/^/        /' /tmp/grcc.$$ | head -8
     fi
-    # Proves the flowgraph loads and that every block and parameter resolves on
-    # this machine - the same check used while it was written. PYTHONPATH is
-    # set for the reason si4463_grc.sh explains at length.
-    if command -v grcc >/dev/null 2>&1; then
-        if PYTHONPATH="${HERE}" grcc -o /tmp "${HERE}/si4463_rpi.grc" >/tmp/grcc.$$ 2>&1; then
-            ok "si4463_rpi.grc compiles (grcc)"
-        else
-            warn "si4463_rpi.grc did not compile:"
-            sed 's/^/        /' /tmp/grcc.$$ | head -8
-        fi
-        rm -f /tmp/grcc.$$ /tmp/si4463_rpi.py /tmp/si4463_rpi_epy_block_0.py
-    fi
+    rm -f /tmp/grcc.$$ /tmp/si4463_rpi.py /tmp/si4463_rpi_epy_block_0.py
 else
-    ok "not installed -- and not needed for the decoder"
-    echo "         For the live spectrum / waterfall / scope view:"
-    echo "             sudo apt install gnuradio gr-osmosdr   # ~1.5 GB"
-    echo "             ./si4463_grc.sh"
+    warn "grcc not found; the flowgraph was not checked"
 fi
 
 say "Choosing a sample rate for this Pi"
-# The port's real question. The chain uses one core; what matters is whether
-# that core keeps up, and only this machine can answer it. The filter's tap
+# The port's real question: whether this machine keeps up, which only this
+# machine can answer. The filter's tap
 # count scales with the input rate, so the lowest workable rate is the cheapest
 # and the recommendation is simply the lowest rate with comfortable margin.
 python3 si4463_benchmark.py --all -s 6 2>&1 | sed 's/^/   /'
@@ -262,6 +243,10 @@ $(printf '\033[1m== Next\033[0m')
    come down too, because the 60 kHz passband must stay below Nyquist:
 
        ./si4463_rt.py --rate 250e3 --lo-offset 50e3
+
+   Look at the signal (needs a desktop, VNC or ssh -X):
+
+       ./si4463_grc.sh
 
    Check what it sees without a transmitter:
 

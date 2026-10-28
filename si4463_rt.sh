@@ -6,8 +6,8 @@
 #
 # On Windows the batch file existed to spell out the radioconda interpreter,
 # because gnuradio and osmosdr lived only there. Here there is nothing to
-# choose: the system python3 has the apt numpy and that is the whole
-# dependency. So this script does the one thing still worth doing, which is to
+# choose: apt installs GNU Radio and gr-osmosdr into the system python3. So
+# this script does the one thing still worth doing, which is to
 # run from the directory the scripts live in - the CSV log is written to
 # ./logs/ relative to the script, and launching from elsewhere (a cron entry, a
 # desktop shortcut, another terminal) would otherwise scatter logs around the

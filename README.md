@@ -5,7 +5,14 @@ Telemetry decoder for the Si4463 2GFSK link, running on a Raspberry Pi 5
 baseband straight off the dongle, then prints and logs each `SensorPacket_t` as
 it arrives.
 
-Needs **numpy and nothing else**. No pip, no virtualenv, no GNU Radio.
+The whole signal path is **GNU Radio**, run headless:
+
+```
+osmosdr.source  ->  freq_xlating_fir_filter_ccf (firdes.low_pass)  ->  Si4463Sink
+```
+
+Everything comes from apt (`gnuradio`, `gr-osmosdr`, `rtl-sdr`). No pip, no
+virtualenv.
 
 ## Install
 
@@ -25,6 +32,8 @@ Then **unplug and replug the RTL-SDR** (see below for why), and run it:
 
 That is the whole installation. `git` is already on Raspberry Pi OS, the repo
 is public so there are no credentials to set up, and the clone is about 3 MB.
+The apt step pulls in GNU Radio, which is roughly 1.5 GB with its
+dependencies, so the first run takes a while.
 The executable bits are recorded in the repo, so `./install.sh` runs directly
 without `bash` in front of it.
 
@@ -32,23 +41,25 @@ without `bash` in front of it.
 
 It is idempotent — re-run it any time. In order, it:
 
-1. installs `python3-numpy`, `rtl-sdr` and `librtlsdr0` from apt,
+1. installs `gnuradio`, `gr-osmosdr` and `rtl-sdr` from apt,
 2. blacklists the DVB-T kernel driver and unloads it,
 3. checks udev permissions and adds you to `plugdev` if needed,
 4. verifies the dongle with `rtl_test -t`,
 5. generates the systemd unit for your account and path,
-6. runs both test suites and decodes the bundled reference capture,
-7. benchmarks your Pi and recommends a sample rate.
+6. checks GNU Radio and gr-osmosdr import, runs the decoder test suite and
+   decodes the bundled reference capture through the GNU Radio chain,
+7. compiles the diagnostic flowgraph with `grcc`,
+8. benchmarks the chain on your Pi and recommends a sample rate.
 
 Nothing it installs comes from pip, which also sidesteps Bookworm's PEP 668
-"externally-managed-environment" refusal — `python3-numpy` comes from apt and is
-the faster build on ARM anyway.
+"externally-managed-environment" refusal — and apt's GNU Radio is built against
+the system VOLK, which is what makes the filter fast on ARM.
 
 ### Two things that catch people
 
 **Replug the dongle.** This is the one step that is easy to skip and breaks
 everything. An RTL-SDR announces itself as a TV receiver, so the kernel binds
-`dvb_usb_rtl28xxu` to it on plug-in and librtlsdr then cannot claim the USB
+`dvb_usb_rtl28xxu` to it on plug-in and gr-osmosdr then cannot claim the USB
 interface. It surfaces as "no SDR found" or `usb_claim_interface error -6`.
 `install.sh` blacklists the driver and unloads it, but the dongle has to be
 re-enumerated for that to take effect.
@@ -89,19 +100,33 @@ once the program stops. `--csv <path>` moves it, `--no-csv` turns it off.
 
 ## Checking it works without a transmitter
 
-Three checks, in increasing strength, all runnable on the Pi with no radio
+Two checks, in increasing strength, both runnable on the Pi with no radio
 attached:
 
 ```bash
-./si4463_dsp_selftest.py     # the numpy front end against a slow reference
 ./si4463_selftest.py         # the decoder, synthesised frames buried in noise
 ./si4463_rt.py --wav test_current_layout.wav
 ```
 
-The third is the real one: a genuine 3.9 s recording containing six known
-packets, through the identical chain the live path uses. It should report
+The second is the real one: a genuine 3.9 s recording containing six known
+packets, through the identical GNU Radio flowgraph the live path uses — only
+the osmosdr source is swapped for a `wavfile_source`. It should report
 **6 packets from 6 bursts, 0 with bit errors, 0 lost by counter**, with counters
 0–5 and ~18.3 dB SNR.
+
+## Reliability: what the decoder watches for
+
+Three failures look exactly like a quiet band in the packet log, so the live
+decoder measures each one while the flowgraph runs:
+
+| Failure | How it is caught | What happens |
+|---------|------------------|--------------|
+| **The Pi falls behind** and librtlsdr's buffers overflow | Samples reaching the decoder are counted against the wall clock every 10 s | A shortfall over 5% is printed with its size, and totalled in the final summary |
+| **The dongle stops streaming** — pulled, browned out, or a wedged USB transfer | No samples for `--stall-timeout` seconds (default 10) | The decoder exits non-zero; the systemd unit's `Restart=always` reopens the device 5 s later |
+| **A decoder exception** on a malformed burst | Caught inside the GNU Radio block's `work()` | The traceback is logged (at most once a minute) and the stream carries on, instead of the block's thread dying silently |
+
+`--status` also prints the process's CPU load (every GNU Radio thread) per
+second of signal, and warns once if it passes 80%.
 
 ## Seeing the signal: the GNU Radio flowgraph
 
@@ -112,7 +137,6 @@ samples. `si4463_rpi.grc` is the answer to that: the same chain with three Qt
 sinks attached, so you can look at the signal.
 
 ```bash
-sudo apt install gnuradio gr-osmosdr    # ~1.5 GB, only for this
 ./si4463_grc.sh
 ```
 
@@ -130,8 +154,8 @@ rising edge at 0.05 — without a trigger the display is mostly the 95% of the
 time nothing is transmitting, with the burst flashing past unreadably.
 
 This is a **diagnostic tool, not the deployment path.** It needs a desktop
-session, VNC or `ssh -X`, and GNU Radio. The headless decoder imports none of
-it. Keep using `si4463_rt.py` to actually run the link.
+session, VNC or `ssh -X`. `si4463_rt.py` builds the same chain without the Qt
+sinks; keep using it to actually run the link.
 
 ### How it is put together
 
@@ -141,17 +165,8 @@ Block's whole body as an escaped string inside the flowgraph file, which cannot
 be imported, cannot be tested, and produces unreadable diffs; the original
 bench flowgraph did that and carries a complete copy of the decoder inside it.
 Here the `.grc` embeds only a short subclass that forwards to the module, so
-`si4463_core.py` stays the single copy and a fix to it fixes the flowgraph too.
-
-Check GNU Radio itself, with no dongle and no display:
-
-```bash
-python3 si4463_gr_block.py test_current_layout.wav
-```
-
-That builds the flowgraph's chain minus the osmosdr source and the Qt sinks,
-and should decode the same 6 packets. It is how the GNU Radio path was verified
-before it ever saw an antenna.
+the flowgraph and the headless decoder end in the same block, and a fix to it
+fixes both.
 
 ### Why `si4463_grc.sh` rather than opening the file directly
 
@@ -182,17 +197,15 @@ dropped input looks exactly like a quiet band.** So measure it.
 ./si4463_benchmark.py --all
 ```
 
-It pushes synthetic samples through the identical chain and reports processing
-seconds per signal second. Under 0.5 is comfortable; above 0.8 there is no
-margin left for USB interrupts and CSV flushes. For reference, on an x86 Zen 3
-desktop the sweep gives 7% at 250 kS/s and 15% at 1.2 MS/s — **a Pi 5 is
-several times slower than that for this work**, which is exactly why the
-benchmark ships rather than a promise.
+It runs the identical GNU Radio flowgraph on synthetic noise as fast as the
+machine allows and reports CPU seconds (all threads) per signal second. Under
+0.5 is comfortable; above 0.8 there is no margin left for USB interrupts and
+CSV flushes. For reference, on an x86 Zen 3 desktop the sweep gives 6–11%
+across 250 kS/s to 2.4 MS/s — **a Pi 5 is several times slower than that for
+this work**, which is exactly why the benchmark ships rather than a promise.
 
-The live decoder also measures itself as it runs: `--status` prints the load
-and any dropped buffers periodically, it says so once if load passes 80%, and
-the final summary reports drops explicitly rather than letting them pass as
-silence.
+The live decoder also measures itself as it runs — see
+[Reliability](#reliability-what-the-decoder-watches-for).
 
 ### Sample rate
 
@@ -230,20 +243,8 @@ against what it got and says so.
 * **Don't use `--agc`.** The tuner AGC hunts during the 1.07 s of silence
   between bursts and is still recovering when the next preamble arrives.
 
-### The `--pipe` fallback and its gain trap
-
-If `librtlsdr` cannot be loaded, `--pipe` runs the `rtl_sdr` command and reads
-its stdout. It is equivalent in every respect but one: `rtl_sdr` parses `-g`
-into tenths of a dB and then treats **zero as "enable AGC"** —
-
-```c
-if (0 == gain) { verbose_auto_gain(dev); } else { ... }
-```
-
-— so `rtl_sdr -g 0` does not mean 0 dB, it means the control loop this link
-must not use. The pipe source substitutes 0.9 dB, the R820T2's next step up,
-and prints that it did. Through librtlsdr the distinction is expressible and
-0 dB manual is really 0 dB, which is why that is the default path.
+* **`--device-args`** passes extra gr-osmosdr rtl options through, e.g.
+  `--device-args buffers=32` for more USB buffering on a busy Pi.
 
 ## Installing without git
 
@@ -293,28 +294,21 @@ cd ~/Decoder_Raspi && bash install.sh
 ## What changed from the Windows version
 
 `si4463_core.py` — the actual demodulator, framer and packet parser — is
-**unchanged**. It was always numpy-only and knew nothing about GNU Radio, so a
-packet that decodes here decodes identically on the Windows bench, and
-`si4463_selftest.py` is the same regression suite it always was.
+**unchanged**, so a packet that decodes here decodes identically on the Windows
+bench, and `si4463_selftest.py` is the same regression suite it always was.
 
-Only the front end was rewritten, because only the front end was GNU Radio:
+The chain is the same GNU Radio chain the Windows build ran, now headless:
 
 | Was | Is now | Why |
 |-----|--------|-----|
-| `osmosdr.source` | `si4463_rtlsdr.py` — ctypes onto `librtlsdr` | gr-osmosdr is a large dependency for one block, and the piece most often missing from a Pi image |
-| `filter.freq_xlating_fir_filter_ccf` | `si4463_dsp.py` — numpy | ~100 lines, and it drops the last non-apt dependency |
-| `firdes.low_pass` | `si4463_dsp.lowpass_taps` | same Hamming-windowed sinc, same tap-count heuristic |
-| `si4463_rt.bat` | `si4463_rt.sh` | no interpreter to choose; system `python3` has apt numpy |
+| Qt flowgraph generated by GRC | `si4463_rt.py` — the same blocks in a `gr.top_block`, no Qt | runs over SSH and under systemd with no display |
+| decoder embedded in the `.grc` | `si4463_gr_block.py` | importable, testable, shared by the live decoder, benchmark and flowgraph |
+| `si4463_rt.bat` | `si4463_rt.sh` | apt installs GNU Radio into the system `python3`, so there is no interpreter to choose |
 | `si4463_bench_decode.py` | `si4463_rt.py --wav` | the replay path is the live path, so a separate batch decoder was duplicate code |
+| — | stall, sample-loss and decoder-error watchdogs | each of those otherwise looks like a quiet band |
 
-GNU Radio is available again, but only as an *optional diagnostic* — see
-[the flowgraph section](#seeing-the-signal-the-gnu-radio-flowgraph). It is not
-installed by `install.sh`, the decoder does not import it, and the headless path
-runs on a clean image with numpy alone.
-
-The original GNU Radio flowgraph is kept in `reference/` for provenance. It
-documents the physical layer at length and is what the numpy chain was written
-against. Nothing imports it and it is not needed to run anything.
+The original bench flowgraph is kept in `reference/` for provenance. It
+documents the physical layer at length. Nothing imports it.
 
 ## Layout
 
@@ -322,23 +316,19 @@ against. Nothing imports it and it is not needed to run anything.
 si4463_core.py              the decoder. Unchanged from the Windows tree.
 si4463_csv.py               one CSV row per packet, flushed as decoded.
 
-si4463_dsp.py               NEW. Frequency-translating decimating FIR in numpy,
-                            replacing GNU Radio's block and firdes.
-si4463_rtlsdr.py            NEW. RTL-SDR via ctypes->librtlsdr (async), with an
-                            rtl_sdr pipe fallback and a WAV replay source.
-si4463_rt.py                NEW. The live front end tying those together.
-si4463_benchmark.py         NEW. Does this Pi keep up?
+si4463_gr_block.py          GNU Radio sink block around the decoder, and the
+                            filter constants every chain shares.
+si4463_rt.py                the live decoder: headless GNU Radio flowgraph,
+                            osmosdr -> freq_xlating_fir_filter -> sink, with
+                            the reliability watchdogs.
+si4463_benchmark.py         does this Pi keep up? Same flowgraph, timed.
 
-si4463_gr_block.py          NEW. GNU Radio sink block around the decoder,
-                            plus a headless self-test. The only file that
-                            imports gnuradio; nothing else depends on it.
-si4463_rpi.grc              NEW. Diagnostic flowgraph: spectrum, waterfall,
-                            burst envelope, live gain. Validated with grcc.
-si4463_grc.sh               NEW. Opens the flowgraph with CWD and PYTHONPATH
-                            set, so GRC can resolve the decoder block.
+si4463_rpi.grc              diagnostic flowgraph: spectrum, waterfall, burst
+                            envelope, live gain. Validated with grcc.
+si4463_grc.sh               opens the flowgraph with CWD and PYTHONPATH set,
+                            so GRC can resolve the decoder block.
 
 si4463_selftest.py          decoder regression tests (unchanged)
-si4463_dsp_selftest.py      NEW. Tests for the numpy front end.
 si4463_check_capture.py     "is the transmitter even in this recording?"
 si4463_tnc.py               soundcard front end; see below.
 

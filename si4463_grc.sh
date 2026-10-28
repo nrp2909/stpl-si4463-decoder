@@ -27,8 +27,8 @@
 #     ./si4463_grc.sh                 # open si4463_rpi.grc
 #     ./si4463_grc.sh --help          # gnuradio-companion's own options
 #
-# For the headless decoder, none of this applies - si4463_rt.py imports nothing
-# from GNU Radio and runs over SSH with no display.
+# The headless decoder needs none of this: si4463_rt.py builds the same chain
+# in Python, without Qt sinks, and runs over SSH with no display.
 
 set -euo pipefail
 
@@ -42,10 +42,7 @@ gnuradio-companion is not installed.
 
     sudo apt install gnuradio gr-osmosdr
 
-That is roughly 1.5 GB, and it is needed only for this flowgraph. The headless
-decoder needs none of it:
-
-    ./si4463_rt.py
+./install.sh installs it, along with everything the headless decoder needs.
 
 If gr-osmosdr is unavailable on your release, GNU Radio 3.10 also ships
 gr-soapy in-tree; install soapysdr-module-rtlsdr and swap the osmosdr source
@@ -68,8 +65,8 @@ desktop session on the Pi, VNC, or ssh -X. Options:
   * run it on the Pi's own desktop, or over VNC
   * ssh -X pi@raspberrypi.local   then re-run this script
   * to check the GNU Radio chain itself with no display and no dongle:
-        python3 si4463_gr_block.py test_current_layout.wav
-  * to actually run the link headless, use the numpy decoder:
+        ./si4463_rt.py --wav test_current_layout.wav
+  * to actually run the link headless, with no display:
         ./si4463_rt.py
 EOF
     exit 1

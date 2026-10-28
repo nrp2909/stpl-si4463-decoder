@@ -9,8 +9,8 @@ options:
       Raspberry Pi 5 with an RTL-SDR Blog V3.
 
       This is the see-it version, not the deployment version. The
-      headless decoder is si4463_rt.py, which needs only numpy and
-      no GNU Radio at all; use that to actually run the link. Use
+      headless decoder is si4463_rt.py, the same GNU Radio chain
+      without the Qt sinks; use that to actually run the link. Use
       this when something is wrong and you need to look at the
       signal: the three sinks answer, in order, "is the burst
       there and is DC clear of it", "are the bursts arriving on
@@ -395,9 +395,9 @@ blocks:
     alias: ''
     burst_threshold_db: threshold_db
     comment: |-
-      The decoder. Identical code to the headless si4463_rt.py path --
-      si4463_core.py knows nothing about GNU Radio -- so a packet that
-      decodes here decodes there, and vice versa.
+      The decoder. The same Si4463Sink the headless si4463_rt.py
+      flowgraph ends in, so a packet that decodes here decodes there,
+      and vice versa.
     csv_path: None
     decim_rate: decim_rate
     deviation: deviation
