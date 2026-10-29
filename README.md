@@ -79,7 +79,7 @@ pull never collides with your packet logs or your local unit file.
 ## Run
 
 ```bash
-./si4463_rt.py                                  # live, 435.000 MHz
+./si4463_rt.py                                  # live, 433.400 MHz
 ./si4463_rt.py --rate 250e3 --lo-offset 50e3    # low-CPU mode
 ./si4463_rt.py --list-devices
 ./si4463_rt.py --wav test_current_layout.wav    # replay, no radio needed

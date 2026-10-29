@@ -5,7 +5,7 @@ si4463_tnc -- a Direwolf-shaped soundcard TNC for the Si4463 sensor link.
 
 Direwolf takes audio from a receiver's discriminator and prints AX.25 frames.
 This does the same job for the 2GFSK sensor packets: point a receiver at
-435.000 MHz, send its demodulated audio into a virtual audio cable, and this
+433.400 MHz, send its demodulated audio into a virtual audio cable, and this
 program prints each SensorPacket_t as it arrives.
 
     Si4463 --RF--> RTL-SDR --> NFM demod --> loopback audio --> si4463_tnc

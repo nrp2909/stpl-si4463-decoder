@@ -310,9 +310,9 @@ def main(argv=None):
         prog='si4463_rt',
         description='Real-time Si4463 sensor-packet decoder for RTL-SDR on '
                     'Raspberry Pi, as a headless GNU Radio flowgraph.')
-    p.add_argument('-f', '--freq', type=float, default=435.000e6,
-                   help='transmitter frequency in Hz (default: 435.000e6, the '
-                        'Si4463 at FREQ_CONTROL_INTE=57, FRAC=0x080000, '
+    p.add_argument('-f', '--freq', type=float, default=433.400e6,
+                   help='transmitter frequency in Hz (default: 433.400e6, the '
+                        'Si4463 at FREQ_CONTROL_INTE=56, FRAC=0x0E4B18, '
                         'outdiv 8)')
     p.add_argument('-r', '--rate', type=float, default=1.2e6,
                    help='SDR sample rate in Hz (default: 1.2e6). The RTL2832 '

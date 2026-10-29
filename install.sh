@@ -234,7 +234,7 @@ cat <<EOF
 
 $(printf '\033[1m== Next\033[0m')
 
-   Live decode (settings default to 435.000 MHz, 1.2 MS/s):
+   Live decode (settings default to 433.400 MHz, 1.2 MS/s):
 
        ./si4463_rt.py
 

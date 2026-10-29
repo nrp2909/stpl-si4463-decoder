@@ -51,9 +51,9 @@ blocks:
   id: variable
   parameters:
     comment: |-
-      Transmitter centre frequency. The Si4463 at FREQ_CONTROL_INTE=57,
-      FRAC=0x080000, outdiv 8.
-    value: 435.000e6
+      Transmitter centre frequency. The Si4463 at FREQ_CONTROL_INTE=56,
+      FRAC=0x0E4B18, outdiv 8.
+    value: 433.400e6
   states:
     bus_sink: false
     bus_source: false
