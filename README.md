@@ -1,7 +1,8 @@
 # Si4463 Packet Decoder — Raspberry Pi
 
-Telemetry decoder for the Si4463 2GFSK link, running on a Raspberry Pi 5
-(Debian Bookworm) with an RTL-SDR Blog V3. It takes the signal as complex
+Telemetry decoder for the Si4463 2GFSK link, running on a Raspberry Pi 4 Model B
+(Raspberry Pi OS / Debian Bookworm, 64-bit recommended) with an RTL-SDR Blog
+V3. It runs unchanged on a Pi 5. It takes the signal as complex
 baseband straight off the dongle, then prints and logs each `SensorPacket_t` as
 it arrives.
 
@@ -54,6 +55,19 @@ It is idempotent — re-run it any time. In order, it:
 Nothing it installs comes from pip, which also sidesteps Bookworm's PEP 668
 "externally-managed-environment" refusal — and apt's GNU Radio is built against
 the system VOLK, which is what makes the filter fast on ARM.
+
+### Pi 4 Model B notes
+
+* **Use 64-bit Raspberry Pi OS** (Bookworm, arm64). The 32-bit image works —
+  GNU Radio is packaged for armhf too — but the filter runs on 32-bit NEON
+  kernels and costs more CPU. `install.sh` says which one you have.
+* **Use the official 5.1 V / 3 A supply.** A Pi 4 on a weak supply browns out
+  its USB ports, the dongle stops streaming, and the log goes quiet as if
+  nothing were transmitting. `install.sh` reads `vcgencmd get_throttled` and
+  warns if undervoltage or thermal throttling has happened since boot. A
+  heatsink is worth fitting for unattended runs.
+* **Either USB port works.** The dongle is USB 2.0; the blue USB 3 ports are
+  fine for it.
 
 ### Two things that catch people
 
@@ -201,8 +215,9 @@ It runs the identical GNU Radio flowgraph on synthetic noise as fast as the
 machine allows and reports CPU seconds (all threads) per signal second. Under
 0.5 is comfortable; above 0.8 there is no margin left for USB interrupts and
 CSV flushes. For reference, on an x86 Zen 3 desktop the sweep gives 6–11%
-across 250 kS/s to 2.4 MS/s — **a Pi 5 is several times slower than that for
-this work**, which is exactly why the benchmark ships rather than a promise.
+across 250 kS/s to 2.4 MS/s — **a Pi 4 is several times slower than that for
+this work** (and a Pi 5 sits in between), which is exactly why the benchmark
+ships rather than a promise.
 
 The live decoder also measures itself as it runs — see
 [Reliability](#reliability-what-the-decoder-watches-for).

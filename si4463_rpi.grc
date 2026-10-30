@@ -6,7 +6,7 @@ options:
     cmake_opt: ''
     comment: |-
       Diagnostic flowgraph for the Si4463 telemetry link on a
-      Raspberry Pi 5 with an RTL-SDR Blog V3.
+      Raspberry Pi 4 Model B with an RTL-SDR Blog V3.
 
       This is the see-it version, not the deployment version. The
       headless decoder is si4463_rt.py, the same GNU Radio chain

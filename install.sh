@@ -47,6 +47,36 @@ if [[ -r /proc/device-tree/model ]]; then
 fi
 ok "kernel $(uname -r) on $(uname -m)"
 
+# The userland, not the kernel, decides what apt installs: Raspberry Pi OS
+# 32-bit on a Pi 4 boots a 64-bit kernel (uname says aarch64) over armhf
+# packages. armhf GNU Radio works, but its VOLK kernels are the 32-bit NEON
+# ones and the filter costs noticeably more CPU.
+ARCH="$(dpkg --print-architecture)"
+if [[ "${ARCH}" == "arm64" || "${ARCH}" == "amd64" ]]; then
+    ok "userland ${ARCH}"
+else
+    warn "userland ${ARCH}: works, but 64-bit Raspberry Pi OS (arm64) is"
+    warn "faster for this chain. Check the benchmark at the end."
+fi
+
+# A Pi 4 on a marginal supply browns out its USB ports, and a dongle that
+# browns out stops streaming -- which reads exactly like a quiet band. The
+# official 5.1 V / 3 A supply avoids it; a phone charger often does not.
+if command -v vcgencmd >/dev/null 2>&1; then
+    THROTTLED="$(vcgencmd get_throttled 2>/dev/null | cut -d= -f2)"
+    if [[ -z "${THROTTLED}" ]]; then
+        warn "vcgencmd get_throttled gave no answer"
+    elif (( THROTTLED == 0 )); then
+        ok "no undervoltage or throttling since boot"
+    else
+        (( THROTTLED & 0x10000 )) && warn "undervoltage has occurred since boot -- use a 5.1 V / 3 A supply"
+        (( THROTTLED & 0x40000 )) && warn "CPU has been throttled since boot -- fit a heatsink or fan"
+        (( THROTTLED & 0x80000 )) && warn "soft temperature limit reached since boot"
+        (( THROTTLED & 0x1 ))     && bad  "undervoltage RIGHT NOW (get_throttled=${THROTTLED})"
+        true
+    fi
+fi
+
 say "Packages"
 # gnuradio         the runtime: scheduler, filter blocks, firdes, VOLK
 # gr-osmosdr       osmosdr.source, which drives the RTL-SDR through librtlsdr
